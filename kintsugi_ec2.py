@@ -23,20 +23,25 @@ CSV_OUTPUT     = "/data/voice_with_scores.csv"
 CHECKPOINT     = 50  # save progress every N rows
 # ──────────────────────────────────────────────────────────────────
 
-# Load and join voice data
-print("Loading data...")
-voice_v1 = pd.read_csv(CSV_V1)
-voice_v2 = pd.read_csv(CSV_V2)
-voice = pd.concat([voice_v1, voice_v2]).reset_index(drop=True)
-print(f"Total rows: {len(voice)}")
+# Load and join voice data OR load existing progress
+if os.path.exists(CSV_OUTPUT):
+    print(f"Found existing progress! Loading {CSV_OUTPUT} to resume...")
+    voice = pd.read_csv(CSV_OUTPUT)
+else:
+    print("No checkpoint found. Loading raw data...")
+    voice_v1 = pd.read_csv(CSV_V1)
+    voice_v2 = pd.read_csv(CSV_V2)
+    voice = pd.concat([voice_v1, voice_v2]).reset_index(drop=True)
+    
+    # Add score columns if starting fresh
+    if "depression_score" not in voice.columns:
+        voice["depression_score"] = None
+    if "anxiety_score" not in voice.columns:
+        voice["anxiety_score"] = None
+    if "score_status" not in voice.columns:
+        voice["score_status"] = None
 
-# Add score columns if not already present (allows resuming if interrupted)
-if "depression_score" not in voice.columns:
-    voice["depression_score"] = None
-if "anxiety_score" not in voice.columns:
-    voice["anxiety_score"] = None
-if "score_status" not in voice.columns:
-    voice["score_status"] = None
+print(f"Total rows: {len(voice)}")
 
 # Setup AWS
 session = boto3.Session(
@@ -87,6 +92,14 @@ print("─" * 50)
 
 for i, idx in enumerate(to_process):
     row = voice.loc[idx]
+    
+    # ── Handle missing (NaN) URLs so the script doesn't crash ──
+    if pd.isna(row["voice_url"]):
+        print(f"[{i+1}/{len(to_process)}] Row index {idx} has no voice_url. Skipping.")
+        voice.at[idx, "score_status"] = "missing_url"
+        continue
+    # ────────────────────────────────────────────────────────────────
+
     filename = Path(row["voice_url"]).name
     print(f"[{i+1}/{len(to_process)}] {filename}")
 
@@ -100,11 +113,11 @@ for i, idx in enumerate(to_process):
     # Save checkpoint every N rows
     if (i + 1) % CHECKPOINT == 0:
         voice.to_csv(CSV_OUTPUT, index=False)
-        print(f"  💾 Checkpoint saved ({i+1} processed)")
+        print(f"Checkpoint saved ({i+1} processed in this run)")
 
 # Final save
 voice.to_csv(CSV_OUTPUT, index=False)
-print(f"\n✅ Done! Results saved to {CSV_OUTPUT}")
+print(f"\nDone! Results saved to {CSV_OUTPUT}")
 
 # Summary
 print("\n── Score Status Summary ──")
